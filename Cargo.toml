@@ -1,0 +1,26 @@
+[package]
+name = "tg-signer"
+version = "0.1.0"
+edition = "2021"
+description = "Telegram daily sign-in automation: login, @username /command rules, button clicking, scheduled runs (Asia/Shanghai), systemd autostart."
+license = "MIT"
+
+[dependencies]
+grammers-client = { version = "0.10", features = ["proxy"] }
+grammers-mtsender = "0.10"
+grammers-session = "0.10"
+grammers-tl-types = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-std", "signal"] }
+chrono = "0.4"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 锁定上游传递依赖，避免 rc 版本漂移导致 grammers-crypto 编译失败
+glass_pumpkin = "=2.0.0-rc0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
