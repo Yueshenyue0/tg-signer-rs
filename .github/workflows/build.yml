@@ -10,42 +10,96 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: musl 静态编译，无 glibc 依赖
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: tg-signer-linux-x86_64
+            musl: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            asset: tg-signer-linux-aarch64
+            musl: true
+            cross: true
+          # Windows: 静态 CRT，无 VC 运行库依赖
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: tg-signer-windows-x86_64.exe
+            static_crt: true
+          # macOS: 系统自带运行库，原生编译即可
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: tg-signer-macos-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: tg-signer-macos-x86_64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust musl toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --no-self-update
-          rustup target add x86_64-unknown-linux-musl
-          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update && rustup target add ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: matrix.musl && !matrix.cross
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Install cross (Linux aarch64 static)
+        if: matrix.cross
+        run: cargo install cross --locked
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: musl
+          key: ${{ matrix.target }}
 
-      - name: Build (static musl, no glibc dependency)
-        run: cargo build --release --target x86_64-unknown-linux-musl
-
-      - name: Check static linkage
+      - name: Build
+        shell: bash
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: ${{ matrix.static_crt && '-C target-feature=+crt-static' || '' }}
         run: |
-          cp target/x86_64-unknown-linux-musl/release/tg-signer tg-signer-linux-x86_64-musl
-          chmod +x tg-signer-linux-x86_64-musl
-          file tg-signer-linux-x86_64-musl
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          bin=tg-signer
+          if [[ "$TARGET" == *windows* ]]; then bin=tg-signer.exe; fi
+          cp "target/$TARGET/release/$bin" "$ASSET"
+          chmod +x "$ASSET" 2>/dev/null || true
+          if command -v file >/dev/null; then file "$ASSET" || true; fi
+        env:
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tg-signer-linux-x86_64-musl
-          path: tg-signer-linux-x86_64-musl
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" tg-signer-linux-x86_64-musl \
+          gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "tg-signer $GITHUB_REF_NAME" \
-            --notes "单二进制 tg-signer（Linux x86_64，musl 静态编译，无 glibc 依赖，任意 Linux 可直接运行）。"
+            --notes "全平台单二进制：Linux x86_64/aarch64（musl 静态，无 glibc 依赖）、Windows x86_64（静态 CRT）、macOS ARM/x86_64。下载对应平台产物直接运行即可。"
