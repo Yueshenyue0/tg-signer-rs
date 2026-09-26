@@ -10,80 +10,34 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset: tg-signer-linux-x86_64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            asset: tg-signer-linux-aarch64
-            cross: true
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            asset: tg-signer-windows-x86_64.exe
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            asset: tg-signer-macos-aarch64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: tg-signer-macos-x86_64
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --no-self-update && rustup target add ${{ matrix.target }}
-
-      - name: Install cross (Linux aarch64)
-        if: matrix.cross
-        run: cargo install cross --locked
+        run: rustup toolchain install stable --profile minimal --no-self-update
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
 
       - name: Build
-        shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        run: cargo build --release
 
       - name: Prepare artifact
-        shell: bash
-        run: |
-          bin=tg-signer
-          if [[ "$TARGET" == *windows* ]]; then bin=tg-signer.exe; fi
-          cp "target/$TARGET/release/$bin" "$ASSET"
-          chmod +x "$ASSET" 2>/dev/null || true
-        env:
-          TARGET: ${{ matrix.target }}
-          ASSET: ${{ matrix.asset }}
+        run: cp target/release/tg-signer tg-signer-linux-x86_64 && chmod +x tg-signer-linux-x86_64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-          path: dist
+          name: tg-signer-linux-x86_64
+          path: tg-signer-linux-x86_64
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "tg-signer $GITHUB_REF_NAME" --generate-notes
+          gh release create "$GITHUB_REF_NAME" tg-signer-linux-x86_64 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "tg-signer $GITHUB_REF_NAME" \
+            --notes "单二进制 tg-signer（Linux x86_64）。用法见 README。"
