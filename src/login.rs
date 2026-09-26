@@ -1,4 +1,4 @@
-//! 交互式登录（手机号 -> 验证码 -> 可选 2FA）。
+//! 交互式登录（手机号 -> 验证码 -> 可选 2FA），支持指定账号编号。
 use anyhow::{bail, Context, Result};
 use grammers_client::SignInError;
 use std::io::{self, Write};
@@ -11,23 +11,24 @@ fn prompt(msg: &str) -> Result<String> {
     Ok(line.trim().to_string())
 }
 
-pub async fn cmd_login() -> Result<()> {
+pub async fn cmd_login(account: u32) -> Result<()> {
     let api_hash = crate::config::api_hash()?;
-    let tg = crate::tg::Tg::connect().await?;
+    let tg = crate::tg::Tg::connect(account).await?;
     let client = tg.client().clone();
 
     if client.is_authorized().await? {
         let me = client.get_me().await?;
         println!(
-            "✅ 已登录: {} (id={})",
+            "✅ 账号 {account} 已登录: {} (id={})",
             me.first_name().unwrap_or("?"),
             me.id()
         );
-        println!("session: {}", crate::config::session_file().display());
+        println!("session: {}", crate::config::session_file(account).display());
         tg.close().await;
         return Ok(());
     }
 
+    println!(">> 登录账号 {account}");
     let phone = prompt("输入手机号（国际格式，如 +15808467917）: ")?;
     if phone.is_empty() {
         bail!("手机号不能为空");
@@ -51,7 +52,7 @@ pub async fn cmd_login() -> Result<()> {
     match client.sign_in(&token, &code).await {
         Ok(user) => {
             println!(
-                "✅ 登录成功: {} (id={})",
+                "✅ 账号 {account} 登录成功: {} (id={})",
                 user.first_name().unwrap_or("?"),
                 user.id()
             );
@@ -65,18 +66,18 @@ pub async fn cmd_login() -> Result<()> {
                 .await
                 .context("两步验证密码错误")?;
             println!(
-                "✅ 登录成功: {} (id={})",
+                "✅ 账号 {account} 登录成功: {} (id={})",
                 user.first_name().unwrap_or("?"),
                 user.id()
             );
         }
-        Err(SignInError::InvalidCode) => bail!("验证码错误，请重试: tg-signer login"),
+        Err(SignInError::InvalidCode) => bail!("验证码错误，请重试: tg-signer login {account}"),
         Err(SignInError::SignUpRequired) => bail!("该手机号未注册，请先用官方客户端注册"),
         Err(SignInError::InvalidPassword(_)) => bail!("两步验证密码错误"),
         Err(SignInError::Other(e)) => return Err(e.into()),
     }
 
-    println!("session: {}", crate::config::session_file().display());
+    println!("session: {}", crate::config::session_file(account).display());
     tg.close().await;
     Ok(())
 }

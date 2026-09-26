@@ -1,4 +1,4 @@
-//! Telegram 客户端启动与退出。
+//! Telegram 客户端启动与退出（按账号）。
 use anyhow::{Context, Result};
 use grammers_client::Client;
 use grammers_mtsender::SenderPool;
@@ -12,10 +12,10 @@ pub struct Tg {
 }
 
 impl Tg {
-    /// 建立连接并返回客户端（session 持久化在配置目录）
-    pub async fn connect() -> Result<Self> {
+    /// 建立连接并返回客户端（session 持久化到账号目录）
+    pub async fn connect(account: u32) -> Result<Self> {
         let api_id = crate::config::api_id()?;
-        let session_path = crate::config::session_file();
+        let session_path = crate::config::session_file(account);
         if let Some(dir) = session_path.parent() {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("创建目录失败: {}", dir.display()))?;

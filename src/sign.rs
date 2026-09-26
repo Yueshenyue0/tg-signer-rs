@@ -1,4 +1,4 @@
-//! 任务管理与执行：add / list / rm / test(run-once)。
+//! 任务管理与执行：add / list / rm / test(run-once)，按账号。
 use crate::click;
 use crate::config::{self, Task};
 use anyhow::{bail, Context, Result};
@@ -24,7 +24,7 @@ async fn resolve(
     Ok((chat_id, pref))
 }
 
-pub async fn cmd_add(bot: &str, actions: &[String]) -> Result<()> {
+pub async fn cmd_add(account: u32, bot: &str, actions: &[String]) -> Result<()> {
     let name = if bot.starts_with('@') {
         bot.to_string()
     } else {
@@ -49,15 +49,15 @@ pub async fn cmd_add(bot: &str, actions: &[String]) -> Result<()> {
         bail!("至少需要一个动作: /命令 或 button=按钮文本");
     }
 
-    let tg = crate::tg::Tg::connect().await?;
+    let tg = crate::tg::Tg::connect(account).await?;
     let client = tg.client().clone();
     if !client.is_authorized().await? {
-        bail!("尚未登录，请先运行: tg-signer login");
+        bail!("账号 {account} 尚未登录，请先运行: tg-signer login {account}");
     }
     let (chat_id, _pref) = resolve(&client, &name).await?;
     tg.close().await;
 
-    let mut cfg = config::load()?;
+    let mut cfg = config::load(account)?;
     let task = Task {
         name: name.clone(),
         chat_id,
@@ -66,22 +66,23 @@ pub async fn cmd_add(bot: &str, actions: &[String]) -> Result<()> {
     };
     if let Some(existing) = cfg.tasks.iter_mut().find(|t| t.name.eq_ignore_ascii_case(&name)) {
         *existing = task.clone();
-        println!("✅ 已更新任务 {name} (chat_id={chat_id}): {}", task.action_desc());
+        println!("✅ 已更新账号 {account} 任务 {name} (chat_id={chat_id}): {}", task.action_desc());
     } else {
         cfg.tasks.push(task.clone());
-        println!("✅ 已添加任务 {name} (chat_id={chat_id}): {}", task.action_desc());
+        println!("✅ 已添加账号 {account} 任务 {name} (chat_id={chat_id}): {}", task.action_desc());
     }
-    config::save(&cfg)?;
-    println!("配置: {}", config::config_file().display());
+    config::save(account, &cfg)?;
+    println!("配置: {}", config::tasks_file(account).display());
     Ok(())
 }
 
-pub fn cmd_list() -> Result<()> {
-    let cfg = config::load()?;
+pub fn cmd_list(account: u32) -> Result<()> {
+    let cfg = config::load(account)?;
     if cfg.tasks.is_empty() {
-        println!("(暂无任务) 用法: tg-signer add @bot /cmd  或  tg-signer add @bot button=按钮文本");
+        println!("(账号 {account} 暂无任务) 用法: tg-signer add @bot /cmd {account}  或  tg-signer add @bot button=按钮文本 {account}");
         return Ok(());
     }
+    println!("== 账号 {account} 任务 ==");
     println!("{:<4} {:<24} {:<14} {}", "#", "BOT", "CHAT_ID", "动作");
     for (i, t) in cfg.tasks.iter().enumerate() {
         println!("{:<4} {:<24} {:<14} {}", i + 1, t.name, t.chat_id, t.action_desc());
@@ -89,10 +90,10 @@ pub fn cmd_list() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_rm(key: &str) -> Result<()> {
-    let mut cfg = config::load()?;
+pub fn cmd_rm(account: u32, key: &str) -> Result<()> {
+    let mut cfg = config::load(account)?;
     if cfg.tasks.is_empty() {
-        bail!("没有可删除的任务");
+        bail!("账号 {account} 没有可删除的任务");
     }
     let idx = if let Ok(n) = key.parse::<usize>() {
         if n == 0 || n > cfg.tasks.len() {
@@ -111,35 +112,33 @@ pub fn cmd_rm(key: &str) -> Result<()> {
         }
     };
     let removed = cfg.tasks.remove(idx);
-    config::save(&cfg)?;
-    println!("✅ 已删除 {} ({})", removed.name, removed.action_desc());
+    config::save(account, &cfg)?;
+    println!("✅ 已删除账号 {account} 任务 {} ({})", removed.name, removed.action_desc());
     Ok(())
 }
 
 /// 执行全部签到（test / run-once / 定时器共用）
-pub async fn run_all() -> Result<()> {
-    let cfg = config::load()?;
+pub async fn run_all(account: u32) -> Result<()> {
+    let cfg = config::load(account)?;
     if cfg.tasks.is_empty() {
-        bail!("没有任务，先运行: tg-signer add @bot /cmd");
+        bail!("账号 {account} 没有任务，先运行: tg-signer add @bot /cmd {account}");
     }
-    let tg = crate::tg::Tg::connect().await?;
+    let tg = crate::tg::Tg::connect(account).await?;
     let client = tg.client().clone();
     if !client.is_authorized().await? {
-        bail!("尚未登录，请先运行: tg-signer login");
+        bail!("账号 {account} 尚未登录，请先运行: tg-signer login {account}");
     }
 
-    config::log("========== 签到开始 ==========");
+    config::log(account, "========== 签到开始 ==========");
     let mut ok = 0usize;
     let mut fail = 0usize;
 
     for task in &cfg.tasks {
-        let action = task.action_desc();
-        // 解析 peer：优先用户名，失败则报错
         let resolved = resolve(&client, &task.name).await;
         let pref = match resolved {
             Ok((_, pref)) => pref,
             Err(e) => {
-                config::log(&format!("✗ {} 解析失败: {:#}", task.name, e));
+                config::log(account, &format!("✗ {} 解析失败: {:#}", task.name, e));
                 fail += 1;
                 continue;
             }
@@ -148,12 +147,12 @@ pub async fn run_all() -> Result<()> {
         let mut task_ok = true;
         for cmd in &task.commands {
             match client.send_message(pref, cmd.as_str()).await {
-                Ok(m) => config::log(&format!(
+                Ok(m) => config::log(account, &format!(
                     "✓ {} 发送 {} (msg_id={})",
                     task.name, cmd, m.id()
                 )),
                 Err(e) => {
-                    config::log(&format!("✗ {} 发送 {} 失败: {e}", task.name, cmd));
+                    config::log(account, &format!("✗ {} 发送 {} 失败: {e}", task.name, cmd));
                     task_ok = false;
                 }
             }
@@ -161,16 +160,15 @@ pub async fn run_all() -> Result<()> {
         }
 
         if let Some(btn) = &task.button {
-            // 没发过文本命令时用 /start 唤出菜单
             let trigger = if task.commands.is_empty() {
                 Some("/start")
             } else {
                 None
             };
             match click::click_button(&client, pref, btn, trigger).await {
-                Ok(()) => config::log(&format!("✓ {} 点击「{btn}」成功", task.name)),
+                Ok(()) => config::log(account, &format!("✓ {} 点击「{btn}」成功", task.name)),
                 Err(e) => {
-                    config::log(&format!("✗ {} 点击「{btn}」失败: {e:#}", task.name));
+                    config::log(account, &format!("✗ {} 点击「{btn}」失败: {e:#}", task.name));
                     task_ok = false;
                 }
             }
@@ -182,17 +180,37 @@ pub async fn run_all() -> Result<()> {
         } else {
             fail += 1;
         }
-        let _ = action;
     }
 
-    config::log(&format!("========== 签到结束: 成功 {ok} / 失败 {fail} =========="));
+    config::log(account, &format!("========== 签到结束: 成功 {ok} / 失败 {fail} =========="));
     tg.close().await;
     if ok == 0 && fail > 0 {
-        bail!("全部任务失败，详见日志 {}", config::log_file().display());
+        bail!(
+            "账号 {account} 全部任务失败，详见日志 {}",
+            config::log_file(account).display()
+        );
     }
     Ok(())
 }
 
-pub async fn cmd_test() -> Result<()> {
-    run_all().await
+pub async fn cmd_test(account: u32) -> Result<()> {
+    run_all(account).await
+}
+
+/// 列出所有账号及其任务数
+pub fn cmd_accounts() -> Result<()> {
+    let accounts = config::existing_accounts();
+    if accounts.is_empty() {
+        println!("(暂无账号) 先运行: tg-signer login");
+        return Ok(());
+    }
+    println!("{:<8} {:<10} {}", "账号", "任务数", "session");
+    for a in accounts {
+        let tasks = config::load(a).map(|c| c.tasks.len()).unwrap_or(0);
+        let sess = config::session_file(a);
+        let has = if sess.exists() { "✓" } else { "✗" };
+        println!("{:<8} {:<10} {} {}", a, tasks, has, sess.display());
+    }
+    println!("\n用法: 在命令末尾加账号编号，如 tg-signer add @bot /qd 2");
+    Ok(())
 }

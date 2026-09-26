@@ -11,35 +11,35 @@ use std::process::Command;
 
 fn print_help() {
     println!(
-        "tg-signer {ver} - Telegram 每日签到工具 (Rust 单二进制)
+        "tg-signer {ver} - Telegram 每日签到工具 (Rust 单二进制，多账号)
 
-用法:
-  tg-signer login                      登录 Telegram 账号（交互式，生成 session）
-  tg-signer add @bot /cmd [/cmd2...]   添加签到任务（按 @用户名 解析）
-  tg-signer add @bot button=按钮文本    添加按钮签到任务（如: add @bot button=✍️每日签到）
-  tg-signer list                       列出所有签到任务
-  tg-signer rm <n|@bot>                删除任务（按编号或 @username）
-  tg-signer test                       立即执行一次全部签到（调试用）
-  tg-signer run-once                   同 test，供 cron/systemd 手动触发
-  tg-signer run                        常驻运行，按计划时间自动签到（北京时间）
-  tg-signer setup-service              安装 systemd 服务+timer（开机自启，每日定时执行）
-  tg-signer uninstall-service          卸载 systemd 服务+timer
-  tg-signer status                     查看服务/任务状态
+用法（命令末尾可加账号编号，默认账号 1）:
+  tg-signer login [N]                   登录账号 N（交互式，生成 session）
+  tg-signer accounts                    列出所有账号
+  tg-signer add @bot /cmd [/cmd2...] [N]  添加签到任务（@用户名 格式）
+  tg-signer add @bot button=按钮文本 [N]   添加按钮签到任务（如 button=✍️每日签到）
+  tg-signer list [N]                    列出账号 N 的签到任务
+  tg-signer rm <n|@bot> [N]             删除账号 N 的任务
+  tg-signer test [N]                    立即执行一次账号 N 的签到（调试）
+  tg-signer run-once [N]                同 test，供 cron/systemd 触发
+  tg-signer run [N]                     常驻运行，每日定时签到（北京时间）
+  tg-signer setup-service [N]           安装 systemd 服务+timer（开机自启）
+  tg-signer uninstall-service [N]       卸载该账号的 systemd 服务+timer
+  tg-signer status [N]                  查看账号 N 的任务/服务/日志
 
 环境变量:
-  TG_API_ID / TG_API_HASH   Telegram API 凭证（默认使用内置公开凭证）
+  TG_API_ID / TG_API_HASH   Telegram API 凭证（默认内置公开凭证）
   TG_PROXY                  SOCKS5 代理，如 socks5://127.0.0.1:1080
   TG_SIGN_TIME              每日执行时间 HH:MM（默认 07:00，北京时间）
   TG_CONFIG_DIR             配置目录（默认 ~/.config/tg-signer）
 
 示例:
-  tg-signer login
-  tg-signer add @AEONSGKBot /qd
-  tg-signer add @hh_liemo_bot /checkin
-  tg-signer add @Kaernet2_bot /sign
-  tg-signer add @DJXZTbot button=✍️每日签到
-  tg-signer test
-  sudo tg-signer setup-service",
+  tg-signer login                # 登录账号1（老用法不变）
+  tg-signer login 2              # 登录账号2
+  tg-signer add @AEONSGKBot /qd          # 加到账号1
+  tg-signer add @DJXZTbot button=✍️每日签到 2   # 加到账号2
+  tg-signer test 2
+  sudo tg-signer setup-service 2         # 账号2 独立定时器",
         ver = env!("CARGO_PKG_VERSION")
     );
 }
@@ -59,134 +59,56 @@ fn main() {
 }
 
 async fn dispatch(args: &[String]) -> Result<()> {
-    match args[0].as_str() {
-        "login" => login::cmd_login().await,
+    // 末尾的纯数字 = 账号编号（如 `add @bot /qd 1`、`list 2`）
+    let (args, account) = config::split_account(args)?;
+    let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
+
+    match cmd {
+        "login" => login::cmd_login(account).await,
         "add" => {
             if args.len() < 3 {
-                bail!("用法: tg-signer add @bot /cmd1 [/cmd2...]  或  tg-signer add @bot button=按钮文本");
+                bail!("用法: tg-signer add @bot /cmd1 [/cmd2...] [账号]  或  tg-signer add @bot button=按钮文本 [账号]");
             }
-            sign::cmd_add(&args[1], &args[2..]).await
+            sign::cmd_add(account, &args[1], &args[2..]).await
         }
-        "list" | "ls" => sign::cmd_list(),
+        "list" | "ls" => sign::cmd_list(account),
         "rm" | "remove" | "del" => {
             if args.len() < 2 {
-                bail!("用法: tg-signer rm <编号|@bot>");
+                bail!("用法: tg-signer rm <编号|@bot> [账号]");
             }
-            sign::cmd_rm(&args[1])
+            sign::cmd_rm(account, &args[1])
         }
-        "test" | "run-once" => sign::cmd_test().await,
-        "run" => scheduler::cmd_run().await,
-        "setup-service" => cmd_setup_service(),
-        "uninstall-service" => cmd_uninstall_service(),
-        "status" => cmd_status(),
+        "test" | "run-once" => sign::cmd_test(account).await,
+        "run" => scheduler::cmd_run(account).await,
+        "setup-service" => scheduler::cmd_setup_service(account),
+        "uninstall-service" => scheduler::cmd_uninstall_service(account),
+        "accounts" => sign::cmd_accounts(),
+        "status" => cmd_status(account),
         other => bail!("未知命令: {other}，运行 tg-signer help 查看用法"),
     }
 }
 
-const SERVICE: &str = r#"[Unit]
-Description=tg-signer daily sign-in (systemd timer trigger)
-After=network-online.target
-Wants=network-online.target
+fn cmd_status(account: u32) -> Result<()> {
+    config::migrate_legacy();
+    println!("== 账号 {account} | 目录: {} ==", config::account_dir(account).display());
+    sign::cmd_list(account)?;
 
-[Service]
-Type=oneshot
-ExecStart=%s run-once
-Environment=TZ=Asia/Shanghai
-
-[Install]
-WantedBy=multi-user.target
-"#;
-
-const TIMER: &str = r#"[Unit]
-Description=tg-signer daily sign-in at %TIME% (Asia/Shanghai)
-
-[Timer]
-OnCalendar=*-*-* %TIME%:00
-Persistent=true
-RandomizedDelaySec=30
-
-[Install]
-WantedBy=timers.target
-"#;
-
-const SERVICE_PATH: &str = "/etc/systemd/system/tg-signer.service";
-const TIMER_PATH: &str = "/etc/systemd/system/tg-signer.timer";
-
-fn self_exe() -> Result<String> {
-    Ok(std::fs::canonicalize("/proc/self/exe")?
-        .to_string_lossy()
-        .to_string())
-}
-
-fn systemctl(args: &[&str]) -> Result<()> {
-    let st = Command::new("systemctl").args(args).status()?;
-    if !st.success() {
-        bail!("systemctl {} 失败 (exit {:?})", args.join(" "), st.code());
-    }
-    Ok(())
-}
-
-fn is_root() -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata("/proc/self")
-            .map(|m| m.uid() == 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-fn cmd_setup_service() -> Result<()> {
-    let exe = self_exe()?;
-    let time = config::check_sign_time()?;
-    let service = SERVICE.replace("%s", &exe);
-    let timer = TIMER.replace("%TIME%", &time);
-
-    if !is_root() {
-        bail!("setup-service 需要 root 权限（写 /etc/systemd/system），请用 sudo 运行");
-    }
-
-    std::fs::write(SERVICE_PATH, service)?;
-    std::fs::write(TIMER_PATH, timer)?;
-    println!("已写入 {SERVICE_PATH}");
-    println!("已写入 {TIMER_PATH}（每日 {time} 北京时间）");
-
-    systemctl(&["daemon-reload"])?;
-    systemctl(&["enable", "--now", "tg-signer.timer"])?;
-    let _ = systemctl(&["--no-pager", "list-timers", "tg-signer.timer"]);
-
-    println!("\n✅ 安装完成：开机自启 + 每日 {time} 自动签到。");
-    println!("   查看状态: tg-signer status");
-    println!("   卸载:     sudo tg-signer uninstall-service");
-    Ok(())
-}
-
-fn cmd_uninstall_service() -> Result<()> {
-    let _ = systemctl(&["disable", "--now", "tg-signer.timer"]);
-    let _ = std::fs::remove_file(SERVICE_PATH);
-    let _ = std::fs::remove_file(TIMER_PATH);
-    systemctl(&["daemon-reload"])?;
-    println!("✅ 已卸载 tg-signer systemd 服务与定时器。");
-    Ok(())
-}
-
-fn cmd_status() -> Result<()> {
-    println!("== 配置目录: {} ==", config::config_dir().display());
-    sign::cmd_list()?;
-    println!("\n== systemd timer ==");
+    let suffix = if account == config::DEFAULT_ACCOUNT {
+        "tg-signer".to_string()
+    } else {
+        format!("tg-signer-{account}")
+    };
+    println!("\n== systemd timer ({suffix}) ==");
     match Command::new("systemctl")
-        .args(["--no-pager", "list-timers", "tg-signer.timer"])
+        .args(["--no-pager", "list-timers", &format!("{suffix}.timer")])
         .status()
     {
         Ok(s) if s.success() => {}
-        _ => println!("(未安装，运行 sudo tg-signer setup-service 安装)"),
+        _ => println!("(未安装，运行 sudo tg-signer setup-service {account} 安装)"),
     }
+
     println!("\n== 最近日志 ==");
-    let log = config::log_file();
+    let log = config::log_file(account);
     if log.exists() {
         let out = Command::new("tail").args(["-n", "20"]).arg(&log).output()?;
         print!("{}", String::from_utf8_lossy(&out.stdout));
