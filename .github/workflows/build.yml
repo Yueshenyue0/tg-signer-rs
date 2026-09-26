@@ -14,30 +14,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Install Rust musl toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: musl
 
-      - name: Build
-        run: cargo build --release
+      - name: Build (static musl, no glibc dependency)
+        run: cargo build --release --target x86_64-unknown-linux-musl
 
-      - name: Prepare artifact
-        run: cp target/release/tg-signer tg-signer-linux-x86_64 && chmod +x tg-signer-linux-x86_64
+      - name: Check static linkage
+        run: |
+          cp target/x86_64-unknown-linux-musl/release/tg-signer tg-signer-linux-x86_64-musl
+          chmod +x tg-signer-linux-x86_64-musl
+          file tg-signer-linux-x86_64-musl
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tg-signer-linux-x86_64
-          path: tg-signer-linux-x86_64
+          name: tg-signer-linux-x86_64-musl
+          path: tg-signer-linux-x86_64-musl
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" tg-signer-linux-x86_64 \
+          gh release create "$GITHUB_REF_NAME" tg-signer-linux-x86_64-musl \
             --repo "$GITHUB_REPOSITORY" \
             --title "tg-signer $GITHUB_REF_NAME" \
-            --notes "单二进制 tg-signer（Linux x86_64）。用法见 README。"
+            --notes "单二进制 tg-signer（Linux x86_64，musl 静态编译，无 glibc 依赖，任意 Linux 可直接运行）。"
