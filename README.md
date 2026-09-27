@@ -5,6 +5,9 @@ Telegram 每日签到自动化 —— **单二进制、零运行环境依赖、�
 ## 特性
 
 - **多账号**：账号用数字编号 1、2、3...，命令末尾加编号即可（默认账号 1，老用法完全兼容）
+- **结果校验**：发送后读取 bot 回复，默认匹配「签到成功」；`expect=关键词` 按 bot 自定义，`expect=off` 关闭
+- **失败自动重试**：每个动作最多重试 3 次（`TG_SIGN_RETRIES` 可调 1..5）
+- **失败通知**：有失败时自动发 Telegram「收藏夹」（Saved Messages）汇总，`TG_NOTIFY=0` 关闭
 - `login` 交互式登录（手机号 → 验证码 → 可选两步验证）
 - `add @bot /cmd` 按 `@用户名` 配置签到命令，一条任务可多个命令
 - `add @bot button=按钮文本` 点击 inline 按钮签到（如 `✍️每日签到`）
@@ -24,6 +27,7 @@ tg-signer add @AEONSGKBot /qd                  # 账号1
 tg-signer add @hh_liemo_bot /checkin           # 账号1
 tg-signer add @Kaernet2_bot /sign 2            # 账号2
 tg-signer add @DJXZTbot button=✍️每日签到        # 账号1
+tg-signer add @somebot /qd expect=已签到        # 自定义校验关键词（默认「签到成功」）
 
 # 管理
 tg-signer accounts         # 列出所有账号

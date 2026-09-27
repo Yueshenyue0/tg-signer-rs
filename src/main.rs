@@ -18,6 +18,7 @@ fn print_help() {
   tg-signer accounts                    列出所有账号
   tg-signer add @bot /cmd [/cmd2...] [N]  添加签到任务（@用户名 格式）
   tg-signer add @bot button=按钮文本 [N]   添加按钮签到任务（如 button=✍️每日签到）
+  tg-signer add @bot /qd expect=已签到 [N] 自定义校验关键词（默认「签到成功」，off=关闭）
   tg-signer list [N]                    列出账号 N 的签到任务
   tg-signer rm <n|@bot> [N]             删除账号 N 的任务
   tg-signer test [N]                    立即执行一次账号 N 的签到（调试）
@@ -31,6 +32,9 @@ fn print_help() {
   TG_API_ID / TG_API_HASH   Telegram API 凭证（默认内置公开凭证）
   TG_PROXY                  SOCKS5 代理，如 socks5://127.0.0.1:1080
   TG_SIGN_TIME              每日执行时间 HH:MM（默认 07:00，北京时间）
+  TG_SIGN_EXPECT            全局校验关键词（默认 签到成功，| 分隔多个，off 关闭）
+  TG_SIGN_RETRIES           每个动作重试次数（默认 3，1..5）
+  TG_NOTIFY                 失败通知开关（默认开；0/off 关闭）
   TG_CONFIG_DIR             配置目录（默认 ~/.config/tg-signer）
 
 示例:

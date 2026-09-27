@@ -10,6 +10,9 @@ pub const DEFAULT_API_HASH: &str = "d524b414d21f4d37f08684c1df41ac9c";
 /// 默认账号编号（不带参数时使用）
 pub const DEFAULT_ACCOUNT: u32 = 1;
 
+/// 默认校验关键词：bot 回复包含该词（串）即认为签到成功
+pub const DEFAULT_EXPECT: &str = "签到成功";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     /// 显示名，如 @AEONSGKBot
@@ -22,6 +25,10 @@ pub struct Task {
     /// 按钮文本（点击签到），如 "✍️每日签到"
     #[serde(default)]
     pub button: Option<String>,
+    /// 自定义校验关键词（逗号/竖线分隔，命中任一即通过；off=关闭校验）
+    /// None 时用环境变量 TG_SIGN_SIGN_EXPECT，再无则默认 "签到成功"
+    #[serde(default)]
+    pub expect: Option<String>,
 }
 
 impl Task {
@@ -33,7 +40,43 @@ impl Task {
         if let Some(b) = &self.button {
             parts.push(format!("点击「{b}」"));
         }
+        if let Some(e) = &self.expect {
+            parts.push(format!("校验:{e}"));
+        }
         parts.join(" + ")
+    }
+
+    /// 期望回复关键词列表；None = 关闭校验
+    pub fn expect_patterns(&self) -> Option<Vec<String>> {
+        let raw = self
+            .expect
+            .clone()
+            .or_else(|| {
+                std::env::var("TG_SIGN_EXPECT")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+            })
+            .unwrap_or_else(|| DEFAULT_EXPECT.to_string());
+        let r = raw.trim();
+        if r.is_empty()
+            || r.eq_ignore_ascii_case("off")
+            || r.eq_ignore_ascii_case("false")
+            || r == "0"
+            || r.eq_ignore_ascii_case("none")
+        {
+            return None;
+        }
+        let pats: Vec<String> = r
+            .split([',', '|'])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if pats.is_empty() { None } else { Some(pats) }
+    }
+
+    /// 按钮动作的前置触发：只有按钮没有命令时先发 /start 唤出菜单
+    pub fn trigger(&self) -> Option<&'static str> {
+        if self.commands.is_empty() { Some("/start") } else { None }
     }
 }
 
@@ -200,6 +243,14 @@ pub fn api_hash() -> Result<String> {
         Ok(v) if !v.is_empty() => Ok(v),
         _ => Ok(DEFAULT_API_HASH.to_string()),
     }
+}
+
+/// 是否开启失败通知（默认开；TG_NOTIFY=0/false 关闭）
+pub fn notify_enabled() -> bool {
+    !matches!(
+        std::env::var("TG_NOTIFY").unwrap_or_default().trim(),
+        "0" | "false" | "off" | "no"
+    )
 }
 
 /// 校验时间格式，供 setup-service 前检查
